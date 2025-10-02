@@ -1,4 +1,4 @@
-import { Scene, Vector3, Ray, TransformNode, Mesh, Color3, Color4, UniversalCamera, Quaternion, AnimationGroup, ExecuteCodeAction, ActionManager, ParticleSystem, Texture, SphereParticleEmitter, Sound, Observable, ShadowGenerator, AssetContainer, ArcRotateCamera, Vector4, Camera, HavokPlugin, PhysicsEventType, DefaultRenderingPipeline } from "@babylonjs/core";
+import { Scene, Vector3, Ray, TransformNode, Mesh, Color3, Color4, UniversalCamera, Quaternion, AnimationGroup, ExecuteCodeAction, ActionManager, ParticleSystem, Texture, SphereParticleEmitter, Sound, Observable, ShadowGenerator, AssetContainer, ArcRotateCamera, Vector4, Camera, HavokPlugin, PhysicsEventType, DefaultRenderingPipeline, SolidParticleSystem, StandardMaterial, MeshBuilder } from "@babylonjs/core";
 import { InputController } from "./inputController";
 import { Island } from "../island/island";
 import { ActionName } from "./actionManager/action.types";
@@ -41,7 +41,11 @@ export class CharacterController {
     private _prevVelY = 0;
     private _leftGroundAt = -1;
 
-
+    private _smokeSPS: SolidParticleSystem;
+    private _smokeEmit: Mesh;
+    private _landingSmokeTrigger: boolean;
+    private _dustSPS: SolidParticleSystem;
+    private _dustSPSTrigger: boolean;
 
     private _lastGroundTouch: number = -1;
     private _groundedLockoutUntil: number = -1;
@@ -110,6 +114,8 @@ export class CharacterController {
             ANIM_CONFIG
             
         );
+
+
         
         this.camera.setTarget(this.characterMesh.getAbsolutePosition());
 
@@ -119,11 +125,13 @@ export class CharacterController {
         // included for now in case of change of base controller and add new properties for each level
         this._input = input ??= new InputController(scene);
 
-        this._baseSpeed = 2.5;
+        this._baseSpeed = 3.5;
  
         this._jumping = false;
         this._isGrounded = false;
         this._lastGroundTouch = 0;
+
+        this._createSmokeSPS();
 
        // --- Setup (one-time): mark pickable ground meshes ---
         /*
@@ -232,6 +240,10 @@ export class CharacterController {
             this._animationController.setVelocities(Math.hypot(v.x, v.z), v.y);
 
             if (landed) {
+                this._landingSmokeTrigger = true;
+                let charP = this.characterMesh.getAbsolutePosition();
+                this._smokeEmit.position = new Vector3(charP.x, charP.y-0.3, charP.z);
+                this._smokeSPS.initParticles();
                 this._animationController.notifyLanding(Math.abs(this._prevVelY));
             }
 
@@ -248,6 +260,19 @@ export class CharacterController {
         // });
 
         this.scene.onBeforeRenderObservable.add(() => {
+            //console.log(this._landingSmokeTrigger);
+            if (this._landingSmokeTrigger) {
+                this._smokeEmit.unfreezeWorldMatrix();
+                this._smokeEmit._unFreeze();
+                //smokeEmit.position = new BABYLON.Vector3(this.character.position.x, this.character.position.y, this.character.position.z);
+            
+                this._smokeSPS.setParticles();
+            }
+            else {
+                this._smokeEmit.freezeWorldMatrix();
+                this._smokeEmit._freeze();
+            }
+
             if (Debug.has(DebugFlag.Actions)) {
                 console.table(this._actions.inspect().actions);
             }
@@ -263,7 +288,7 @@ export class CharacterController {
         animArr.forEach((anim) => {
             map.set(anim.name, anim);
         });
-        console.log(map);
+        //console.log(map);
         return map;
     }
 
@@ -296,7 +321,7 @@ export class CharacterController {
         this._characterSpeed = this._baseSpeed;
 
         if (this._input.sprinting) {
-            this._characterSpeed = this._baseSpeed * 2;
+            this._characterSpeed = this._baseSpeed * 5/this._baseSpeed;
         }
 
         // the input direction stays the same when you stop moving so this block needs to stay independent for now
@@ -352,13 +377,118 @@ export class CharacterController {
     
     }
 
-    private _setUpAnimations(): void {
+    private _createSmokeSPS() {
 
+        this._landingSmokeTrigger = false;
+        const smokeSPS = new SolidParticleSystem("SPS", this.scene);
+        const boxSize = 0.6;
+        const smoke = MeshBuilder.CreateBox("smoke", {size: boxSize},this.scene);
+        const smokeNum = 20
+        smokeSPS.addShape(smoke, smokeNum); 
+        smoke.dispose();
+
+        this._smokeEmit = smokeSPS.buildMesh();
+        this._smokeEmit.setAbsolutePosition(this.characterMesh.getAbsolutePosition());
+        const smokeMaterial = new StandardMaterial("smoke", this.scene);
+        smokeMaterial.disableLighting = true;
+        smokeMaterial.emissiveColor = new Color3(0.8, 0.8, 0.8);
+        this._smokeEmit.material = smokeMaterial;
+
+        smokeSPS.computeParticleRotation = false; // prevents from computing particle.rotation
+        smokeSPS.computeParticleTexture = false; // prevents from computing particle.uvs
+        smokeSPS.computeParticleColor = false; // prevents from computing particle.color
+        smokeSPS.computeParticleVertex = false; // prevents from calling the custom updateParticleVertex() function
+
+        // smokeSPS behavior definition
+        const smokeSpeed = 0.02;
+        const smokeGrav = 0;
+        
+
+        //const smokeSpeed;
+        //const smokeGrav = 0.01
+
+        // init
+        smokeSPS.initParticles = () => {
+        // just recycle everything
+        for (let p = 0; p < smokeSPS.nbParticles; p++) {
+            smokeSPS.particles[p].isVisible = false;
+            smokeSPS.recycleParticle(smokeSPS.particles[p]);
+        }
+        };
+
+        // recycle
+        smokeSPS.recycleParticle = function(particle) {
+        // Set particle new velocity, scale and rotation
+        //particle.isVisible = true;
+        
+        const angInc = 360/smokeNum;
+        const angle = (particle.idx * angInc) * Math.PI/180;
+        const smokeOffsetX = -Math.sin(angle) * 0.1;
+        const smokeOffsetZ = -Math.cos(angle) * 0.1;
+
+        particle.position.x = smokeOffsetX;
+        particle.position.y = 0;
+        particle.position.z = smokeOffsetZ;
+        particle.velocity.x = -Math.sin(angle) * smokeSpeed;
+        particle.velocity.y = 0;
+        particle.velocity.z = -Math.cos(angle) * smokeSpeed;
+        const scale = (Math.random()*0.2 - 0.1) + 0.25;
+        particle.scaling.x = scale;
+        particle.scaling.y = scale;
+        particle.scaling.z = scale;
+
+        particle.color.a = 1;
+
+        return particle;
+        };
+        // update : will be called by setParticles()
+        smokeSPS.updateParticle = (particle) => {  
+            //console.log("update");
+            //console.log(particle.color.a);
+            
+            if(this._landingSmokeTrigger) {
+
+                particle.isVisible = true;
+                particle.velocity.y += smokeGrav;                         // apply gravity to y
+                (particle.position).addInPlace(particle.velocity); 
+                const scalingDec = 0.015;
+                particle.scaling.x -= scalingDec;
+                particle.scaling.y -= scalingDec;
+                particle.scaling.z -= scalingDec;
+
+                if (particle.scaling.x <= 0 && particle.scaling.y <= 0 && particle.scaling.z <= 0) {
+                particle.velocity.x = 0;
+                particle.velocity.y = 0;
+                particle.velocity.z = 0;
+                (particle.position).addInPlace(particle.velocity);  
+                particle.isVisible = false;
+                }
+            }
+            else {
+                particle.velocity.x = 0;
+                particle.velocity.y = 0;
+                particle.velocity.z = 0;
+                (particle.position).addInPlace(particle.velocity);  
+                particle.isVisible = false;
+            }
+
+            return particle;
+        };
+
+        this._smokeSPS = smokeSPS;
+
+        // init all particle values and set them once to apply textures, colors, etc
+        this._smokeSPS.initParticles();
+        this._smokeSPS.setParticles();
     }
 
-    private _animatePlayer(): void{ 
-
+    private _getLandingTrigger(): boolean {
+        return this._landingSmokeTrigger;
     }
+    private _setLandingTrigger(trigger: boolean): void {
+        this._landingSmokeTrigger = trigger;
+    }
+
     /** Up = opposite of gravity (works for any handedness / tilted gravity) */
     private _up(): Vector3 {
         const g = this.scene.getPhysicsEngine()?.gravity;

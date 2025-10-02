@@ -209,8 +209,10 @@ export class AnimationController {
       const k = (this.current === "sprint")
         ? (this.cfg.sprintSpeedScale ?? 6.0)
         : (this.cfg.runSpeedScale    ?? 4.0);
+      //console.log(k);
       this.animations.locomotion[this.current].speedRatio =
         Scalar.Clamp(this.horizSpeed / k, 0.6, 1.8);
+      //console.log(this.animations.locomotion[this.current].speedRatio);
     }
   };
 

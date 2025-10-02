@@ -1,4 +1,4 @@
-import { Scene, Mesh, Vector3, Color3,TransformNode, SceneLoader, ParticleSystem, Color4, Texture, PBRMetallicRoughnessMaterial, VertexBuffer, AnimationGroup, Sound, ExecuteCodeAction, ActionManager, Tags, MeshBuilder, StandardMaterial, CubeTexture, Vector2, PolygonMeshBuilder, Polygon, PBRMaterial, PhysicsImpostor, LoadAssetContainerAsync, AbstractMesh, HemisphericLight, DirectionalLight, SpotLight, PointLight, LensFlareSystem, CreateSphere, LensFlare, ShadowGenerator, AssetContainer, ImportMeshAsync, ArcRotateCamera, Vector4, Quaternion, Matrix, Axis, Bone, Space, Skeleton, DefaultRenderingPipeline, DepthOfFieldEffectBlurLevel } from "@babylonjs/core";
+import { Scene, Mesh, Vector3, Color3,TransformNode, SceneLoader, ParticleSystem, Color4, Texture, PBRMetallicRoughnessMaterial, VertexBuffer, AnimationGroup, Sound, ExecuteCodeAction, ActionManager, Tags, MeshBuilder, StandardMaterial, CubeTexture, Vector2, PolygonMeshBuilder, Polygon, PBRMaterial, PhysicsImpostor, LoadAssetContainerAsync, AbstractMesh, HemisphericLight, DirectionalLight, SpotLight, PointLight, LensFlareSystem, CreateSphere, LensFlare, ShadowGenerator, AssetContainer, ImportMeshAsync, ArcRotateCamera, Vector4, Quaternion, Matrix, Axis, Bone, Space, Skeleton, DefaultRenderingPipeline, DepthOfFieldEffectBlurLevel, FreeCamera } from "@babylonjs/core";
 import { WaterMaterial } from "@babylonjs/materials";
 import earcut from "earcut";
 import HavokPhysics, { HavokPhysicsWithBindings } from "@babylonjs/havok";
@@ -61,10 +61,13 @@ export class Island {
     public importedAssets: any;
 
     public camera: ArcRotateCamera;
+    public uiCamera: FreeCamera;
 
     public pipeline: DefaultRenderingPipeline;
 
     private _character?: Mesh;
+
+    private static UI_MASK = 0x10000000;
 
     constructor(scene: Scene) {
         this._scene = scene;      
@@ -80,11 +83,16 @@ export class Island {
         this.camera.wheelPrecision = 75;
         //this.camera.checkCollisions = true;
         //this.camera.collisionRadius = new Vector3(1, 1, 1);
+        this.uiCamera = new FreeCamera("uiCam", Vector3.Zero(), this._scene);
+        this.uiCamera.layerMask = Island.UI_MASK;
+
+        this._scene.activeCameras = [this.camera, this.uiCamera];
+
         this._shadowGenActive = true;
         // this.camera.minZ
         // this._character = this._scene.getMeshByName("charParent") as Mesh;
 
-        this.pipeline = new DefaultRenderingPipeline("defaultPipeline", true, this._scene,);
+        this.pipeline = new DefaultRenderingPipeline("defaultPipeline", true, this._scene, [this.camera]);
         this.pipeline.depthOfFieldBlurLevel = DepthOfFieldEffectBlurLevel.High;
         this.pipeline.depthOfFieldEnabled = true;
         this.pipeline.imageProcessing.exposure = 1.5;
@@ -512,17 +520,72 @@ export class Island {
         this._createPalmPhysics(palmVisualRoot, prims);
     }
 
-    private async _loadTrees() {
+    private _instantiatePalmTree(i: number, pos: Vector3) {
+        const inst = this._treeContainer.instantiateModelsToScene(
+            (src) => `${src}_${i}`
+        );
+        const instVisualRoot: TransformNode = inst.rootNodes[0] as TransformNode;
+        const instArmatureRoot: Skeleton = inst.skeletons[0];
 
+        const instPrims: Mesh[] = instVisualRoot.getChildMeshes();
+        const palmTrunk = instPrims[2];
+        const palmBottomLeaf = instPrims[1];
+        const palmTopLeaf = instPrims[0];
+        this.directLightShadowGen.addShadowCaster(palmTrunk);
+        this.directLightShadowGen.addShadowCaster(palmBottomLeaf);
+        this.directLightShadowGen.addShadowCaster(palmTopLeaf);
+         
+        instVisualRoot.setAbsolutePosition(pos);
+        instVisualRoot.rotation.y = Math.random() * Math.PI * 2;
+
+        //offset timewgg
+        inst.animationGroups[0].start(true);
+
+        this._createPalmPhysics(instVisualRoot, instPrims);
+    }
+
+    private async _loadTrees() {
         // First get the asset container containing the mesh, skeleton, and animation group
         const treeImport =  await LoadAssetContainerAsync("../models/environment/palmTree.glb", this._scene);
         this._treeContainer = treeImport;
-        this._treeContainer.addAllToScene();
-        this._createPalmTree();
+        // Get the mesh and skeleton root, reparent to the mesh root, and dispose of the root node created by babylon
+        const palmGltfRoot: TransformNode = this._treeContainer.meshes[0];
+        const palmVisualRoot: TransformNode = palmGltfRoot?.getChildren()[1] as TransformNode;
+        const palmArmatureRoot: TransformNode = palmGltfRoot?.getChildren()[0] as TransformNode;
 
+        palmVisualRoot.setParent(null);
+        palmArmatureRoot.setParent(palmVisualRoot, true);
+
+        palmGltfRoot.dispose();
+
+        // Get the child primitives and set the metadata to be copied per instance
+        const prims = palmVisualRoot.getChildMeshes() as Mesh[];
+
+        const palmTrunk = prims[2];
+        palmTrunk.name = "palmTrunk";
+        palmTrunk.isPickable = true;
+        palmTrunk.metadata ??= {};
+        palmTrunk.metadata.groundType = "Wood";
+
+        const palmBottomLeaf = prims[1];
+        palmBottomLeaf.name = "palmBottomLeaf";
+        palmBottomLeaf.isPickable = true;
+        palmBottomLeaf.metadata ??= {};
+        palmBottomLeaf.metadata.groundType = "PalmLeaf";
+
+        const palmTopLeaf = prims[0];
+        palmTopLeaf.name = "palmTopLeaf";
+        palmTopLeaf.isPickable = true;
+        palmTopLeaf.metadata ??= {};
+        palmTopLeaf.metadata.groundType = "PalmLeaf";
+
+
+        let spawnPos;
+        for (let i=0; i< 3; i++) {
+            spawnPos = new Vector3(i, 0.08, -i%10);
+            this._instantiatePalmTree(i, spawnPos);
+        }
         
-
-        // this._treeContainer.addAllToScene();
     }
 
 //#endregion

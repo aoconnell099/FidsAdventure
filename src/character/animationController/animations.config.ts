@@ -27,12 +27,12 @@ export const ANIM_CONFIG = {
   fadeMs: 120,
 
   // thresholds (world-units/s)
-  runThreshold: 1.0,
-  sprintThreshold: 4.0,
+  // runThreshold: 1.0,
+  // sprintThreshold: 4.0,
 
   // speed-to-clip ratio scaling
-  runSpeedScale: 4.0,    // horiz speed / 4 → 1.0x run cycle
-  sprintSpeedScale: 6.0, // horiz speed / 6 → 1.0x sprint cycle
+  runSpeedScale: 3.3,    // horiz speed / 4 → 1.0x run cycle
+  sprintSpeedScale: 4.8, // horiz speed / 6 → 1.0x sprint cycle
 
   overlayDefaults: { len: 450, inMs: 80, outMs: 120 },
   autoPauseZeroWeightMs: 600, //600,

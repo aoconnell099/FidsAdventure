@@ -231,7 +231,7 @@ class App {
         let scene = this._gamescene;
         //scene.clearColor = new Color4(0.01568627450980392, 0.01568627450980392, 0.20392156862745098); // a color that fit the overall color scheme better
         
-        scene.activeCamera = this._island.camera;
+        scene.activeCameras = [this._island.camera, this._island.uiCamera];
         // scene.activeCamera = this._environment.camera;
         scene.activeCamera.attachControl(this._canvas); // Gives control of the camera to the mouse and keyboard
         
@@ -240,6 +240,7 @@ class App {
 
         //--GUI--
         const playerUI = AdvancedDynamicTexture.CreateFullscreenUI("UI");
+        playerUI.layer.layerMask = 0x10000000;
         //dont detect any inputs from this ui while the game is loading
         scene.detachControl();
 
