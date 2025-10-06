@@ -337,14 +337,14 @@ export class CharacterController {
 
     private _placeFootprint(side: "L" | "R") {
         if (this._isGrounded && this._currentGroundType === "Sand" && this._characterSpeedXZ >= this._baseSpeed - 0.5) {
-            let offsetX = (side == "L" ? (Math.sin(this.characterMesh.rotation.y-Math.PI/2) * 0.1) : (Math.sin(this.characterMesh.rotation.y+Math.PI/2) * 0.1));
-            let offsetZ = (side == "L" ? (Math.cos(this.characterMesh.rotation.y-Math.PI/2) * 0.1) : (Math.cos(this.characterMesh.rotation.y+Math.PI/2) * 0.1));
+            let offsetX = (side == "L" ? (Math.sin(this.characterMesh.rotation.y-Math.PI/2) * 0.08) : (Math.sin(this.characterMesh.rotation.y+Math.PI/2) * 0.08));
+            let offsetZ = (side == "L" ? (Math.cos(this.characterMesh.rotation.y-Math.PI/2) * 0.08) : (Math.cos(this.characterMesh.rotation.y+Math.PI/2) * 0.08));
             if (this._footprintArray.length==20) {
                 this._footprintArray[19].dispose();
                 this._footprintArray.pop();
             }
             let clone = this._footprint.clone(this._footprint.name + "_" + this._footprintArray.length, null, false, false);
-            clone.position = new Vector3(this.characterMesh.position.x+offsetX, 0.09, this.characterMesh.position.z+offsetZ);
+            clone.position = new Vector3(this.characterMesh.position.x+offsetX, 0.05, this.characterMesh.position.z+offsetZ);
             clone.rotation.y = this.characterMesh.rotation.y;
             clone.setEnabled(true);
             clone.freezeWorldMatrix();
