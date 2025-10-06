@@ -1,78 +1,98 @@
-import { Scene, Mesh, Vector3, Color3,TransformNode, SceneLoader, ParticleSystem, Color4, Texture, PBRMetallicRoughnessMaterial, VertexBuffer, AnimationGroup, Sound, ExecuteCodeAction, ActionManager, Tags, MeshBuilder, StandardMaterial, CubeTexture, Vector2, PolygonMeshBuilder, Polygon, PBRMaterial, PhysicsImpostor, LoadAssetContainerAsync, AbstractMesh, HemisphericLight, DirectionalLight, SpotLight, PointLight, LensFlareSystem, CreateSphere, LensFlare, ShadowGenerator, AssetContainer, ImportMeshAsync, ArcRotateCamera, Vector4, Quaternion, Matrix, Axis, Bone, Space, Skeleton, DefaultRenderingPipeline, DepthOfFieldEffectBlurLevel, FreeCamera } from "@babylonjs/core";
+import { Scene, Mesh, Vector3, Color3,TransformNode, SceneLoader, ParticleSystem, Color4, Texture, PBRMetallicRoughnessMaterial, VertexBuffer, AnimationGroup, Sound, ExecuteCodeAction, ActionManager, Tags, MeshBuilder, StandardMaterial, CubeTexture, Vector2, PolygonMeshBuilder, Polygon, PBRMaterial, PhysicsImpostor, LoadAssetContainerAsync, AbstractMesh, HemisphericLight, DirectionalLight, SpotLight, PointLight, LensFlareSystem, CreateSphere, LensFlare, ShadowGenerator, AssetContainer, ImportMeshAsync, ArcRotateCamera, Vector4, Quaternion, Matrix, Axis, Bone, Space, Skeleton, DefaultRenderingPipeline, DepthOfFieldEffectBlurLevel, FreeCamera, Scalar } from "@babylonjs/core";
 import { WaterMaterial } from "@babylonjs/materials";
 import earcut from "earcut";
 import HavokPhysics, { HavokPhysicsWithBindings } from "@babylonjs/havok";
 import { PhysicsAggregate, HavokPlugin, PhysicsBody, PhysicsMotionType, PhysicsShapeMesh, PhysicsShape, PhysicsShapeType, PhysicsShapeBox, PhysicsShapeContainer, PhysicsShapeCapsule } from "@babylonjs/core/Physics";
 //import { Player } from "./characterController";
 
+type BoundsXZ = { min: Vector2; max: Vector2 };
+
+interface PoissonOpts {
+    bounds: BoundsXZ;                // AABB that encloses your domain
+    isAllowed: (p: Vector2) => boolean;  // returns true if p is inside your shape *and* allowed
+    r: number;                       // minimum spacing
+    maxPoints?: number;              // default 8
+    k?: number;                      // candidates per active point (default 30)
+    seed?: number;                   // optional determinism
+    initialSeeds?: number;           // default 1; >1 helps with disconnected shapes
+}
+
 export class Island {
     private _scene: Scene;
 
     public _earcut = earcut;
 
-    //Meshes
-    private _skybox: Mesh;
-    private _skyboxMaterial: StandardMaterial;
+    // Cameras
+    public camera: ArcRotateCamera;
+    public uiCamera: FreeCamera;
 
-    private _waterMesh: Mesh;
-    public _waterMtl: WaterMaterial;
-
-    private _sandMaterial: PBRMaterial;
-    private _sandMesh: Mesh;
-
-    private _flowerArr: Array<Mesh>;
-    private _grass: Mesh; // Flower
-    
-    private _grassFloor: Mesh;
-    private _houseMesh: Mesh;
-    private _pierMesh: Mesh;
-
-    private _treeContainer: AssetContainer;
-    private _treeMesh: Mesh;
-    private _treeArr: Array<any>;
-    private _treeMeshList: Array<Mesh>;
-    private static _scratchMatrix = new Matrix();
-    
+    // Lights
     private _hemiLight: HemisphericLight;
-
     private _directLight: DirectionalLight;
-    public directLightShadowGen: ShadowGenerator;
-    
     public spotLight: SpotLight;
+    private _lensFlareLight: PointLight;
+
+    // Pipeline
+    public pipeline: DefaultRenderingPipeline;
+
+    // Shadow Gen
+    public directLightShadowGen: ShadowGenerator;
     public spotLightShadowGen: ShadowGenerator;
 
-    private _lensFlareLight: PointLight;
+    // Lens Flare
     private _lensFlareSystem: LensFlareSystem;
-
-    private _sunSphere: Mesh;
+  
+    // Materials
+    private _skyboxMaterial: StandardMaterial;
+    public _waterMtl: WaterMaterial;
+    private _sandMaterial: PBRMaterial;
     private _sunSphereMtl: StandardMaterial;
-    //....
 
-    private _islandContainer: AssetContainer;
-
-    // Layers
+    // Layers / Masks
     private static LAYER_GROUND = 1 << 0;
     private static LAYER_PLAYER = 1 << 1;
+
+    private static UI_MASK = 0x10000000;
 
     // Triggers
     private _shadowGenActive: boolean;
 
+    // Asset Containers
+    private _grassHousePierContainer: AssetContainer;
+    private _treeContainer: AssetContainer;
+    private _grassAndFlowersContainer: AssetContainer;
+    private _fishingRodContainer: AssetContainer;
+
     public createdAssets: any;
     public importedAssets: any;
 
-    public camera: ArcRotateCamera;
-    public uiCamera: FreeCamera;
+    // Meshes
+    private _skybox: Mesh;
+    private _sunSphere: Mesh;
+    private _waterMesh: Mesh;
+    private _sandMesh: Mesh;
 
-    public pipeline: DefaultRenderingPipeline;
+    private _grassFloor: Mesh;
+    private _houseMesh: Mesh;
+    private _pierMesh: Mesh;
+    
+    private _treeMesh: Mesh; 
+    private _treePositions: Vector2[];
+    private _flowerArr: Mesh[]; // Array of different flower meshes
+    private _grassFlower: Mesh; // Flower
+
+    // -- Not Currently used
+    private _treeArr: Array<any>;
+    private _treeMeshList: Array<Mesh>;
 
     private _character?: Mesh;
-
-    private static UI_MASK = 0x10000000;
 
     constructor(scene: Scene) {
         this._scene = scene;      
         this._scene.useRightHandedSystem = true; 
         this._scene.collisionsEnabled = true;
+
+        // #region Camera and Pipeline
         this.camera = new ArcRotateCamera("Camera", Math.PI / 2, Math.PI / 2, 2, Vector3.Zero(), scene);
         this.camera.lowerRadiusLimit = 2;
         this.camera.upperRadiusLimit = 8;
@@ -83,89 +103,71 @@ export class Island {
         this.camera.wheelPrecision = 75;
         //this.camera.checkCollisions = true;
         //this.camera.collisionRadius = new Vector3(1, 1, 1);
+
         this.uiCamera = new FreeCamera("uiCam", Vector3.Zero(), this._scene);
         this.uiCamera.layerMask = Island.UI_MASK;
-
         this._scene.activeCameras = [this.camera, this.uiCamera];
 
         this._shadowGenActive = true;
-        // this.camera.minZ
-        // this._character = this._scene.getMeshByName("charParent") as Mesh;
 
         this.pipeline = new DefaultRenderingPipeline("defaultPipeline", true, this._scene, [this.camera]);
         this.pipeline.depthOfFieldBlurLevel = DepthOfFieldEffectBlurLevel.High;
         this.pipeline.depthOfFieldEnabled = true;
         this.pipeline.imageProcessing.exposure = 1.5;
         this.pipeline.fxaaEnabled = true;
+        // #endregion
 
-//#region Materials
-
+        //#region Materials
+        // Skybox
         const skyboxMaterial = new StandardMaterial("skyBox", this._scene);
-    
         skyboxMaterial.backFaceCulling = false;
-
         skyboxMaterial.reflectionTexture = new CubeTexture("../textures/TropicalSunnyDay", this._scene);
         skyboxMaterial.reflectionTexture.coordinatesMode = Texture.SKYBOX_MODE;
-
         skyboxMaterial.diffuseColor = new Color3(0, 0, 0);
         skyboxMaterial.specularColor = new Color3(0, 0, 0);
-
         skyboxMaterial.disableLighting = true;
-
         this._skyboxMaterial = skyboxMaterial;
-        
 
-        // Now create the material to be applied to the water "plane"
+        // Water Plane
         const waterMtl = new WaterMaterial("waterMaterial", this._scene, new Vector2(256, 256));
-
         waterMtl.backFaceCulling = true;
-
         waterMtl.bumpTexture = new Texture("../textures/Water/waterbump.png", this._scene);
-
         waterMtl.windForce = -3;
         waterMtl.waveHeight = 0.008;    
         waterMtl.waveSpeed = 50.0;
-
         waterMtl.waterColor = new Color3(0, 0.13, 0.239); //0.12, 0.7, 1
         waterMtl.colorBlendFactor = 0.2;
-
         // Add the skybox to the render list of the water material for reflections of the sky
         waterMtl.addToRenderList(this._skybox);
-
         this._waterMtl = waterMtl;
 
-        // Next create the material to be applied to the sand meshes
+        // Sand
         const sandMaterial = new PBRMaterial("sandMaterial", this._scene);
         let uvScaleNum = 8;
-
         let _albedoTexture = new Texture("../textures/Sand/Sand_001_COLOR.png", this._scene);
         _albedoTexture.uScale = uvScaleNum;
         _albedoTexture.vScale = uvScaleNum;
-
         let _bumpTexture = new Texture("../textures/Sand/Sand_001_NRM.png", this._scene);
         _bumpTexture.uScale = uvScaleNum;
         _bumpTexture.vScale = uvScaleNum;
-
         let _ambientTexture = new Texture("../textures/Sand/Sand_001_OCC.png", this._scene);
         _ambientTexture.uScale = uvScaleNum;
         _ambientTexture.vScale = uvScaleNum;
-        
         sandMaterial.albedoTexture = _albedoTexture;
         sandMaterial.bumpTexture = _bumpTexture;
         sandMaterial.ambientTexture = _ambientTexture;
         sandMaterial.roughness = 1;
         sandMaterial.metallic = 0.65;
-
         this._sandMaterial = sandMaterial
 
-        // Create the sun sphere material
+        // Sun Sphere
         const sunSphereMtl = new StandardMaterial("white", this._scene);
         sunSphereMtl.diffuseColor = new Color3(0, 0, 0);
         sunSphereMtl.specularColor = new Color3(0, 0, 0);
         sunSphereMtl.emissiveColor = new Color3(1, 1, 1);
-
         this._sunSphereMtl = sunSphereMtl;
-//#endregion
+
+        //#endregion
 
     }
 
@@ -174,6 +176,7 @@ export class Island {
         this.importedAssets =  await this._loadAssets();
     }
 
+    /** Helper function to set the collider mask and metadata for physics body and shape that will act as walkable surface */
     private _markAsGround(physicsBody: PhysicsBody) {
         physicsBody.setCollisionCallbackEnabled(true);
         physicsBody.shape.filterMembershipMask = Island.LAYER_GROUND;
@@ -192,7 +195,9 @@ export class Island {
         await this._createSand();   
     }
 
-//#region Skybox
+//#region Created Assets
+
+    //#region Skybox
     private async _createSkybox() {
         // Create the skybox -- out in separate fun to create meshes
         const skybox = MeshBuilder.CreateBox("skyBox", { size: 1000 }, this._scene);
@@ -201,9 +206,9 @@ export class Island {
         skybox.material = this._skyboxMaterial
         this._skybox = skybox;
     }
-//#endregion
+    //#endregion
     
-//#region Lights
+    //#region Lights
     private async _createLights() {
         // create all lighting, lens flares, and the skybox
         const hemiLight = new HemisphericLight("hemiLight", new Vector3(0, 1, 0), this._scene);
@@ -247,15 +252,11 @@ export class Island {
 
         this._lensFlareSystem = lensFlareSystem;
     }
-//#endregion
+    //#endregion
 
-//#region Pipeline/Camera moves
+    //#region Pipeline/Camera moves
     private async _setUpCamPipeMoves() {
-    
-        // this._character ??=  this._scene.getMeshByName("charParent") as Mesh; 
-        
         this._scene.onBeforeCameraRenderObservable.add(() => {
-            
             // camera radius calculation 
             if (this.camera.beta > Math.PI/3) {
                 this.camera.radius = 8-(5*(this.camera.beta-Math.PI/3)/((Math.PI/2-Math.PI/3)-0.1));
@@ -274,9 +275,10 @@ export class Island {
                 this.pipeline.depthOfField.focusDistance = this.camera.radius*1000;
             }
         });
-}
+    }
+    //#endregion
 
-//#region ShadowGen
+    //#region ShadowGen
     private async _createShadowgen() {
         // create a shadow generator
         if (this._shadowGenActive) {
@@ -293,9 +295,9 @@ export class Island {
             this.spotLightShadowGen = spotLightShadowGen;
         }
     }
-//#endregion
+    //#endregion
 
-//#region Water
+    //#region Water
     private async _createWater() {
         // Create the water mesh and position it
         const waterMesh = MeshBuilder.CreateGround("waterMesh", { width: 100, height: 100, subdivisions: 32, updatable: false}, this._scene);
@@ -308,18 +310,18 @@ export class Island {
 
         this._waterMesh = waterMesh; 
     }
-//#endregion
+    //#endregion
 
-//#region Sand
+    //#region Sand
     private async _createSand() {
         // Create an array to hold all of the ground sand meshes that will be merged into one once they are all created
         let sandArr = [];
 
-        // create the base ground for the scene -- this will be sand to simulate an island beachfront with 4 polygons extruding into the sea
+        // Create the base ground for the scene -- this will be sand to simulate an island beachfront with 4 polygons extruding into the sea
         let sand = MeshBuilder.CreateBox("sand", {
-        width: 30,
-        height: 1,
-        depth: 30
+            width: 30,
+            height: 1,
+            depth: 30
         });
         sand.position.y -= 0.45;
         sand.position.z -= 8;
@@ -409,9 +411,277 @@ export class Island {
         this._waterMtl.addToRenderList(sandMesh);
         this._sandMesh = sandMesh;
     }
-//#endregion
+    //#endregion
 
-//#region Tree
+//#endregion 
+
+    private async _loadAssets() {
+        // import the meshes to use in the scene -- handle all of their uses in the executeWhenReady func
+        await this._loadGrassHouseAndPier();
+        await this._loadGrassAndFlowers();
+        await this._loadFishingRod();
+        await this._loadPalmTrees();
+        
+        this.directLightShadowGen.getShadowMap().refreshRate = 0;
+    }
+
+//#region Imported Assets
+
+    // #region GrassFloor, House, and Pier
+    private async _loadGrassHouseAndPier() {
+        // Grass, house, and pier all in one glb. Load into an asset container
+        const islandImport =  await LoadAssetContainerAsync("../models/environment/small_world_glb.glb", this._scene);
+        this._grassHousePierContainer = islandImport;
+        // Get the root node created by babylon and loop through the children(grass, house, pier) assigning each a physics body
+        let islandMeshParent = islandImport.meshes[0];
+        let islandMeshList = islandMeshParent.getChildMeshes();
+        islandMeshList.forEach(m => {
+            // Adjust each mesh material while looping through
+            m.material.backFaceCulling = true; // Stops rendering of meshes not in sight of the camera
+            m.receiveShadows = true;
+            m.checkCollisions = true;
+            m.freezeWorldMatrix(); // Freezes mesh geometry..helps with performance and none of these meshes will move
+            this._waterMtl.addToRenderList(m); // Allows mesh to be reflected in the water
+            if (m.name === "House") {
+                m.isPickable = true;
+                m.metadata ??= {};
+                m.metadata.groundType = "Wood";
+                this._houseMesh = m as Mesh;
+                this.directLightShadowGen.addShadowCaster(m);
+            }
+            if (m.name === "Grass") {
+                m.isPickable = true;
+                m.metadata ??= {};
+                m.metadata.groundType = "Grass";
+                this._grassFloor = m as Mesh;
+            }
+            if (m.name === "Pier") {
+                m.isPickable = true;
+                m.metadata ??= {};
+                m.metadata.groundType = "Wood";
+                this._pierMesh = m as Mesh;
+            }
+            
+            // Set the mesh parent to null so they are no longer in a root array within the scene
+            m.setParent(null);
+
+            // Create a body and shape for each mesh..using a physics shape mesh because they geomerty is not too complicated
+            m.physicsBody = new PhysicsBody(m, PhysicsMotionType.STATIC, true, this._scene);
+            m.physicsBody.shape = new PhysicsShapeMesh(m as Mesh, this._scene);
+            // Mark as ground and set the mask for the physics collision observable
+            this._markAsGround(m.physicsBody);
+            
+        });
+
+        // dispose of the old root node
+        islandMeshParent.dispose();
+
+        islandImport.addAllToScene();
+    }
+    //#endregion
+
+    // #region Grass and Flowers
+    private async _loadGrassAndFlowers() {
+        // MARK: TODO: Refactor this section for poisson disc
+        const grassAndFlowersImport =  await LoadAssetContainerAsync("../models/environment/grass_and_flowers_glb.glb", this._scene);
+        this._grassAndFlowersContainer = grassAndFlowersImport;
+
+        this._flowerArr = [];
+        let gfParent = grassAndFlowersImport.meshes[0];
+        let gfMeshList = gfParent.getChildMeshes();
+        gfMeshList.forEach(m => {
+            m.checkCollisions = false;
+            m.freezeWorldMatrix();
+            //m.setEnabled(false);
+            m.setParent(null);
+            m.receiveShadows=true;
+
+            if (m.name !== "Grass_3") {
+                this._flowerArr.push(m as Mesh);
+            } 
+            else {
+                this._grassFlower = m as Mesh;
+            }
+        });
+
+        gfParent.dispose();
+
+        grassAndFlowersImport.addAllToScene();
+    }
+    //#endregion
+
+    // #region FishingRod
+    private async _loadFishingRod() {
+        
+        const fishingRodImport =  await LoadAssetContainerAsync("../models/items/fishing_rod_glb.glb", this._scene);
+        this._fishingRodContainer = fishingRodImport;
+        let rodParent = fishingRodImport.meshes[0];
+        let rodMeshList = rodParent.getChildMeshes();
+        rodMeshList[0].checkCollisions = true;
+        rodMeshList[0].setParent(null);
+        rodMeshList[0].receiveShadows = true;
+        this.directLightShadowGen.addShadowCaster(rodMeshList[0]);
+        
+        // var music = new Sound("IslandTheme", "assets/islandScene/music/islandSong.mp3", this._scene, null, {
+        //     loop: true,
+        //     autoplay: false
+        //   });
+        // const fishingRod = fishingRodImport.instantiateModelsToScene( (name) => 'FishingRod' );
+        // const fishingRodRoot = fishingRod.rootNodes[0];
+        // fishingRodRoot..rotation = new Vector3(140*Math.PI/180, 95*Math.PI/180, 142*Math.PI/180);
+        // fishingRod.meshes[0].position.x += 0.35;
+        // fishingRod.meshes[0].position.y += 0.05;
+        // fishingRod.meshes[0].position.z -=0.05;
+
+        rodParent.dispose();
+
+        fishingRodImport.addAllToScene();
+    }
+    //#endregion
+
+    //#region Palm Tree
+
+    //MARK: mainLoadtrees()
+    private async _loadPalmTrees() {
+        // Load palm tree asset and prepare it for use
+        await this._loadPalmTree();
+        
+        this._placeFlowersAndTrees();
+    }
+
+    //MARK: _loadPalmAssets()
+    private async _loadPalmTree() {
+        // First get the asset container containing the mesh, skeleton, and animation group
+        const treeImport =  await LoadAssetContainerAsync("../models/environment/palmTree.glb", this._scene);
+        this._treeContainer = treeImport;
+        // Get the mesh and skeleton root, reparent to the mesh root, and dispose of the root node created by babylon
+        const palmGltfRoot: TransformNode = this._treeContainer.meshes[0];
+        const palmVisualRoot: TransformNode = palmGltfRoot?.getChildren()[1] as TransformNode;
+        const palmArmatureRoot: TransformNode = palmGltfRoot?.getChildren()[0] as TransformNode;
+
+        palmVisualRoot.setParent(null);
+        palmArmatureRoot.setParent(palmVisualRoot, true);
+
+        palmGltfRoot.dispose();
+
+        this._treeMesh = palmVisualRoot as Mesh;
+        // Get the child primitives and set the metadata to be copied per instance
+        const prims = palmVisualRoot.getChildMeshes() as Mesh[];
+
+        const palmTrunk = prims[2];
+        palmTrunk.name = "palmTrunk";
+        palmTrunk.isPickable = true;
+        palmTrunk.metadata ??= {};
+        palmTrunk.metadata.groundType = "Wood";
+
+        const palmBottomLeaf = prims[1];
+        palmBottomLeaf.name = "palmBottomLeaf";
+        palmBottomLeaf.isPickable = true;
+        palmBottomLeaf.metadata ??= {};
+        palmBottomLeaf.metadata.groundType = "PalmLeaf";
+
+        const palmTopLeaf = prims[0];
+        palmTopLeaf.name = "palmTopLeaf";
+        palmTopLeaf.isPickable = true;
+        palmTopLeaf.metadata ??= {};
+        palmTopLeaf.metadata.groundType = "PalmLeaf";
+    }
+
+    //MARK: _placeFlowersAndTrees()
+    private _placeFlowersAndTrees() {
+        // Set up all necessary variables and functions for the poisson disc sampling
+        const houseBounding = this._houseMesh.getBoundingInfo().boundingBox;
+        const houseMax = new Vector2(houseBounding.maximumWorld.x, houseBounding.maximumWorld.z);
+        const houseMin = new Vector2(houseBounding.minimumWorld.x, houseBounding.minimumWorld.z);
+        const paddedHouse = this._expandAabbXZ({ min: houseMin, max: houseMax }, 2);
+
+        const grassBounding = this._grassFloor.getBoundingInfo().boundingBox;
+        const grassMax = new Vector2(grassBounding.maximumWorld.x, grassBounding.maximumWorld.z);
+        const grassMin = new Vector2(grassBounding.minimumWorld.x, grassBounding.minimumWorld.z);
+        const paddedGrass = this._expandAabbXZ({min: grassMin, max: grassMax}, 1);
+        const grassPoly = [paddedGrass.min, paddedGrass.max];
+
+        const bounds: BoundsXZ = this._aabbOfPoly([grassMax, grassMin]);
+
+        const insidePaddedGrass = (p: Vector2) =>
+            (p.x >= paddedGrass.min.x && p.x <= paddedGrass.max.x &&
+                p.y >= paddedGrass.min.y && p.y <= paddedGrass.max.y);
+        
+        const outsidePaddedHouse = (p: Vector2) =>
+            !(p.x >= paddedHouse.min.x && p.x <= paddedHouse.max.x &&
+                p.y >= paddedHouse.min.y && p.y <= paddedHouse.max.y);
+
+        const isAllowed = (p: Vector2) =>
+            insidePaddedGrass(p) && outsidePaddedHouse(p);
+
+        const r = 2.5;
+        const maxPoints = 500;
+        const seed = null;
+
+        const points = this._poissonDiskSampleXZ({
+            bounds: bounds,
+            isAllowed: isAllowed,
+            r: r,
+            maxPoints: maxPoints,
+            seed: seed,
+            initialSeeds: 1
+        });
+        this._treePositions = points;
+
+        const spawnPos = new Vector3(0, 0.08, 0);
+        points.forEach((p, i)=> {
+            spawnPos.x = p.x; spawnPos.z = p.y;
+            this._instantiatePalmTree(i, spawnPos);
+        })
+
+    }
+
+    //#region Palm Physics Helpers
+    private _createPalmPhysics(visualRoot: TransformNode, palmPrims: Mesh[]) {
+
+        const trunkBody = new PhysicsBody(visualRoot, PhysicsMotionType.STATIC, false, this._scene);
+        const boundingInfo = palmPrims[2].getBoundingInfo();
+        const trunkDimensions = {
+            height: boundingInfo.boundingBox.maximum._y - boundingInfo.boundingBox.minimum._y,
+            width: boundingInfo.boundingBox.maximum._x - boundingInfo.boundingBox.minimum._x,
+            depth: boundingInfo.boundingBox.maximum._z - boundingInfo.boundingBox.minimum._z
+        };
+        const trunkBoxes = [
+            { center: new Vector3(0, (trunkDimensions.height/3)/2, 0), size: new Vector3((trunkDimensions.width*0.8), (trunkDimensions.height/3), (trunkDimensions.depth*0.8)) },
+            { center: new Vector3(0, (trunkDimensions.height/3)+((trunkDimensions.height/3)/2), 0), size: new Vector3((trunkDimensions.width*0.6), (trunkDimensions.height/3), (trunkDimensions.depth*0.6)) },
+            { center: new Vector3(0, (2*(trunkDimensions.height/3))+((trunkDimensions.height/3)/2), 0), size: new Vector3((trunkDimensions.width*0.4), (trunkDimensions.height/3), (trunkDimensions.depth*0.4)) },
+        ];
+
+        const trunkCompound = new PhysicsShapeContainer(this._scene);
+        for (const b of trunkBoxes) {
+            const box = new PhysicsShapeBox(b.center, Quaternion.Identity(), b.size, this._scene);
+            trunkCompound.addChild(box, Vector3.Zero(), Quaternion.Identity());
+        }
+        trunkBody.shape = trunkCompound;
+        trunkBody.disablePreStep = true;
+        
+        const skeleton = palmPrims[0].skeleton;
+
+        // Quick helper func to grab the bones
+        const B = (name: string) => skeleton.bones.find(b => b.name === name)!;
+
+        const FRONDS = [
+        { inner: "Bone.003", outer: "Bone.013"},
+        { inner: "Bone.004", outer: "Bone.011"},
+        { inner: "Bone.005", outer: "Bone.015"},
+        { inner: "Bone.006", outer: "Bone.017"},
+        { inner: "Bone.007", outer: "Bone.014"},
+        { inner: "Bone.008", outer: "Bone.012"},
+        { inner: "Bone.009", outer: "Bone.016"},
+        { inner: "Bone.010", outer: "Bone.018"}
+        ];
+
+        for (const f of FRONDS) {
+            this._createFrond(B(f.inner));
+        }
+    }
+
+    //MARK: FROND
     private _createFrond(leafInnerBone: Bone) {
         
         // Create the physics body and disable prestep so the collider moves with the animation
@@ -438,88 +708,7 @@ export class Island {
         this._markAsGround(leafBody);
         
     }
-
-
-    private _createPalmPhysics(visualRoot: TransformNode, palmPrims: Mesh[]) {
-
-        const trunkBody = new PhysicsBody(visualRoot, PhysicsMotionType.STATIC, false, this._scene);
-        const boundingInfo = palmPrims[2].getBoundingInfo();
-        const trunkDimensions = {
-            height: boundingInfo.boundingBox.maximum._y - boundingInfo.boundingBox.minimum._y,
-            width: boundingInfo.boundingBox.maximum._x - boundingInfo.boundingBox.minimum._x,
-            depth: boundingInfo.boundingBox.maximum._z - boundingInfo.boundingBox.minimum._z
-        };
-        console.log(trunkDimensions);
-        const trunkBoxes = [
-            { center: new Vector3(0, (trunkDimensions.height/3)/2, 0), size: new Vector3((trunkDimensions.width*0.8), (trunkDimensions.height/3), (trunkDimensions.depth*0.8)) },
-            { center: new Vector3(0, (trunkDimensions.height/3)+((trunkDimensions.height/3)/2), 0), size: new Vector3((trunkDimensions.width*0.6), (trunkDimensions.height/3), (trunkDimensions.depth*0.6)) },
-            { center: new Vector3(0, (2*(trunkDimensions.height/3))+((trunkDimensions.height/3)/2), 0), size: new Vector3((trunkDimensions.width*0.4), (trunkDimensions.height/3), (trunkDimensions.depth*0.4)) },
-        ];
-
-        const trunkCompound = new PhysicsShapeContainer(this._scene);
-        for (const b of trunkBoxes) {
-            const box = new PhysicsShapeBox(b.center, Quaternion.Identity(), b.size, this._scene);
-            trunkCompound.addChild(box, Vector3.Zero(), Quaternion.Identity());
-        }
-        trunkBody.shape = trunkCompound;
-        trunkBody.disablePreStep = false;
-        
-        const skeleton = palmPrims[0].skeleton;
-
-        // Quick helper func to grab the bones
-        const B = (name: string) => skeleton.bones.find(b => b.name === name)!;
-
-        const FRONDS = [
-        { inner: "Bone.003", outer: "Bone.013"},
-        { inner: "Bone.004", outer: "Bone.011"},
-        { inner: "Bone.005", outer: "Bone.015"},
-        { inner: "Bone.006", outer: "Bone.017"},
-        { inner: "Bone.007", outer: "Bone.014"},
-        { inner: "Bone.008", outer: "Bone.012"},
-        { inner: "Bone.009", outer: "Bone.016"},
-        { inner: "Bone.010", outer: "Bone.018"}
-        ];
-
-        for (const f of FRONDS) {
-            this._createFrond(B(f.inner));
-        }
-    }
-    
-    private _createPalmTree() {
-        const palmGltfRoot: TransformNode = this._treeContainer.meshes[0];
-        const palmVisualRoot: TransformNode = palmGltfRoot?.getChildren()[1] as TransformNode;
-        const palmArmatureRoot: TransformNode = palmGltfRoot?.getChildren()[0] as TransformNode;
-
-        palmVisualRoot.setParent(null);
-        palmArmatureRoot.setParent(palmVisualRoot, true);
-        
-        palmGltfRoot.dispose();
-
-        const prims = palmVisualRoot.getChildMeshes() as Mesh[];
-        const palmTrunk = prims[2];
-        palmTrunk.name = "palmTrunk";
-        palmTrunk.isPickable = true;
-        palmTrunk.metadata ??= {};
-        palmTrunk.metadata.groundType = "Wood";
-        this.directLightShadowGen.addShadowCaster(palmTrunk);
-        const palmBottomLeaf = prims[1];
-        palmBottomLeaf.name = "palmBottomLeaf";
-        palmBottomLeaf.isPickable = true;
-        palmBottomLeaf.metadata ??= {};
-        palmBottomLeaf.metadata.groundType = "PalmLeaf";
-        this.directLightShadowGen.addShadowCaster(palmBottomLeaf);
-        const palmTopLeaf = prims[0];
-        palmTopLeaf.name = "palmTopLeaf";
-        palmTopLeaf.isPickable = true;
-        palmTopLeaf.metadata ??= {};
-        palmTopLeaf.metadata.groundType = "PalmLeaf";
-        this.directLightShadowGen.addShadowCaster(palmTopLeaf);
-        
-        let spawnPos = new Vector3(2, 0.08, -2);
-        palmVisualRoot.setAbsolutePosition(spawnPos);
-        this._createPalmPhysics(palmVisualRoot, prims);
-    }
-
+    //MARK: INSTANTIATE
     private _instantiatePalmTree(i: number, pos: Vector3) {
         const inst = this._treeContainer.instantiateModelsToScene(
             (src) => `${src}_${i}`
@@ -538,334 +727,240 @@ export class Island {
         instVisualRoot.setAbsolutePosition(pos);
         instVisualRoot.rotation.y = Math.random() * Math.PI * 2;
 
-        //offset timewgg
-        inst.animationGroups[0].start(true);
+        let speedRatio = Math.random() * (1.15 - 0.85) + 0.85; // Math.random() * (max - min) + min;
+        inst.animationGroups[0].start(true, speedRatio);
 
         this._createPalmPhysics(instVisualRoot, instPrims);
     }
+    //#endregion Palm Physics Helpers
+    
+    //MARK: Poisson-Disc
+    /** Use Bridson's Algorithm to get a Poisson Disk Sampling for the placement of trees. 
+    * This allows for random distribution of coordinates in a grid while maintaining a minimum distance from eachother.
+    * Using the guide at https://sighack.com/post/poisson-disk-sampling-bridsons-algorithm 
+    */
+    private _poissonDiskSampleXZ(opts: PoissonOpts): Vector2[] {
+        const { bounds, isAllowed, r, maxPoints = 8, k = 30, seed, initialSeeds = 1 } = opts;
+        const rand = this._makeRng(seed);
 
-    private async _loadTrees() {
-        // First get the asset container containing the mesh, skeleton, and animation group
-        const treeImport =  await LoadAssetContainerAsync("../models/environment/palmTree.glb", this._scene);
-        this._treeContainer = treeImport;
-        // Get the mesh and skeleton root, reparent to the mesh root, and dispose of the root node created by babylon
-        const palmGltfRoot: TransformNode = this._treeContainer.meshes[0];
-        const palmVisualRoot: TransformNode = palmGltfRoot?.getChildren()[1] as TransformNode;
-        const palmArmatureRoot: TransformNode = palmGltfRoot?.getChildren()[0] as TransformNode;
+        const cell = r / Math.SQRT2;
+        const invCell = 1 / cell;
 
-        palmVisualRoot.setParent(null);
-        palmArmatureRoot.setParent(palmVisualRoot, true);
+        const grid = new Map<string, number>();           // "i,j" -> index in points[]
+        const points: Vector2[] = [];
+        const active: number[] = [];
+        const key = (i:number,j:number)=>`${i},${j}`;
 
-        palmGltfRoot.dispose();
-
-        // Get the child primitives and set the metadata to be copied per instance
-        const prims = palmVisualRoot.getChildMeshes() as Mesh[];
-
-        const palmTrunk = prims[2];
-        palmTrunk.name = "palmTrunk";
-        palmTrunk.isPickable = true;
-        palmTrunk.metadata ??= {};
-        palmTrunk.metadata.groundType = "Wood";
-
-        const palmBottomLeaf = prims[1];
-        palmBottomLeaf.name = "palmBottomLeaf";
-        palmBottomLeaf.isPickable = true;
-        palmBottomLeaf.metadata ??= {};
-        palmBottomLeaf.metadata.groundType = "PalmLeaf";
-
-        const palmTopLeaf = prims[0];
-        palmTopLeaf.name = "palmTopLeaf";
-        palmTopLeaf.isPickable = true;
-        palmTopLeaf.metadata ??= {};
-        palmTopLeaf.metadata.groundType = "PalmLeaf";
-
-
-        let spawnPos;
-        for (let i=0; i< 3; i++) {
-            spawnPos = new Vector3(i, 0.08, -i%10);
-            this._instantiatePalmTree(i, spawnPos);
-        }
-        
-    }
-
-//#endregion
-
-    private async _loadAssets() {
-        // import the meshes to use in the scene -- handle all of their uses in the executeWhenReady func
-        this._loadTrees();
-
-//#region GrassFloor, House, and Pier
-        // import the grass, house, and pier into an asset container
-        const islandImport =  await LoadAssetContainerAsync("../models/environment/small_world_glb.glb", this._scene);
-
-        // get the root node created by babylon and loop through the children(grass, house, pier) assigning each a physics body
-        let islandMeshParent = islandImport.meshes[0];
-        let islandMeshList = islandMeshParent.getChildMeshes();
-        islandMeshList.forEach(m => {
-            // adjust each mesh material while looping through
-            m.material.backFaceCulling = true; // stops rendering of meshes not in sight of the camera
-            m.receiveShadows = true;
-            m.checkCollisions = true;
-            m.freezeWorldMatrix(); // freezes mesh geometry..helps with performance and none of these meshes will move
-            this._waterMtl.addToRenderList(m); // allows mesh to be reflected in the water
-            if (m.name === "House") {
-                m.isPickable = true;
-                m.metadata ??= {};
-                m.metadata.groundType = "Wood";
-                this._houseMesh = m as Mesh;
-                this.directLightShadowGen.addShadowCaster(m);
-            }
-            if (m.name === "Grass") {
-                m.isPickable = true;
-                m.metadata ??= {};
-                m.metadata.groundType = "Grass";
-                this._grassFloor = m as Mesh;
-            }
-            if (m.name === "Pier") {
-                m.isPickable = true;
-                m.metadata ??= {};
-                m.metadata.groundType = "Wood";
-                this._pierMesh = m as Mesh;
-            }
-            
-            //set the mesh parent to null so they are no longer in a root array within the scene
-            m.setParent(null);
-
-            // create a body and shape for each mesh..using a physics shape mesh because they geomerty is not too complicated
-            m.physicsBody = new PhysicsBody(m, PhysicsMotionType.STATIC, true, this._scene);
-            m.physicsBody.shape = new PhysicsShapeMesh(m as Mesh, this._scene);
-            this._markAsGround(m.physicsBody);
-            
+        const gridIndex = (p: Vector2) => ({
+            i: Math.floor((p.x - bounds.min.x) * invCell),
+            j: Math.floor((p.y - bounds.min.y) * invCell),
         });
 
-        // dispose of the old root node
-        islandMeshParent.dispose();
-//#endregion
- 
-//#region Grass and Flowers
-        // import the grass and flowers
-        const grassAndFlowersImport =  await LoadAssetContainerAsync("../models/environment/grass_and_flowers_glb.glb", this._scene);
-        // console.log("GRASS AND FLOWERS\n" +
-        //             "===========\n");
-        // console.log(grassAndFlowersImport);
-        this._flowerArr = [];
-        let gfParent = grassAndFlowersImport.meshes[0];
-        let gfMeshList = gfParent.getChildMeshes();
-        gfMeshList.forEach(m => {
-            m.checkCollisions = false;
-            m.freezeWorldMatrix();
-            //m.setEnabled(false);
-            m.setParent(null);
-            m.receiveShadows=true;
-
-            if (m.name !== "Grass_3") {
-                this._flowerArr.push(m as Mesh);
-            } 
-            else {
-                this._grass = m as Mesh;
-            }
-        });
-
-        gfParent.dispose();
-//#endregion
-
-//#region FishingRod
-        const fishingRodImport =  await LoadAssetContainerAsync("../models/items/fishing_rod_glb.glb", this._scene);
-
-        let rodParent = fishingRodImport.meshes[0];
-        let rodMeshList = rodParent.getChildMeshes();
-        rodMeshList[0].checkCollisions = true;
-        rodMeshList[0].setParent(null);
-        rodMeshList[0].receiveShadows = true;
-        this.directLightShadowGen.addShadowCaster(rodMeshList[0]);
-        
-        // var music = new Sound("IslandTheme", "assets/islandScene/music/islandSong.mp3", this._scene, null, {
-        //     loop: true,
-        //     autoplay: false
-        //   });
-        // const fishingRod = fishingRodImport.instantiateModelsToScene( (name) => 'FishingRod' );
-        // const fishingRodRoot = fishingRod.rootNodes[0];
-        // fishingRodRoot..rotation = new Vector3(140*Math.PI/180, 95*Math.PI/180, 142*Math.PI/180);
-        // fishingRod.meshes[0].position.x += 0.35;
-        // fishingRod.meshes[0].position.y += 0.05;
-        // fishingRod.meshes[0].position.z -=0.05;
-
-        rodParent.dispose();
-//#endregion
-
-        //this._generateFlowersAndTrees();
-
-        islandImport.addAllToScene();
-        //this._treeContainer.addAllToScene();
-        grassAndFlowersImport.addAllToScene();
-        fishingRodImport.addAllToScene();
-        
-        this.directLightShadowGen.getShadowMap().refreshRate = 0;
-    }
-
-
-    private _generateFlowersAndTrees() {
-        let targetMesh = this._grassFloor;
-        let instanceNum = 15;
-        let clumpArr = [];
-        let offsetX;
-        let offsetZ
-
-        for (let i=0; i<8; i++) {
-            let clumpPositionX = targetMesh.position.x+6 - (Math.random()*12);
-            let clumpPositionZ = targetMesh.position.z+4 - (Math.random()*11);
-            while ( (clumpPositionX < 0 && clumpPositionX > -3) && (clumpPositionZ > 1 && clumpPositionZ < 4) ) 
-            { //(clumpPositionZ > 1 && clumpPositionZ < 3)
-                clumpPositionX = targetMesh.position.x+6 - (Math.random()*12);
-                clumpPositionZ = targetMesh.position.z+4 - (Math.random()*11);
-            }
-            clumpArr.push({x: clumpPositionX, z: clumpPositionZ});
-            if (i<2) {
-                let instance = this._treeContainer.instantiateModelsToScene((name) => "palmTree_" + i);
+        // Check that suggested point is far enough away from surrounding grid points
+        const farFromNeighbors = (p: Vector2): boolean => {
+            // Find the candidate’s cell (i,j)
+            const { i, j } = gridIndex(p);
+            /* NOTE:
+                Because of the cell size: cell = r/√2. 
+                The diameter of a cell’s circumscribed circle equals r. 
+                Two points closer than r cannot be separated by more than one cell offset in either axis. 
+                Any point that could violate the r constraint must lie in the candidate’s cell or an immediately adjacent cell. 
+                Therefore, checking the 3×3 block is sufficient and necessary.
                 
-                //console.log(instance);
-                instance.rootNodes.forEach(m => {
-                    //console.log(m);
-                    let p = m as Mesh;
-                    p.position.x = clumpPositionX;
-                    p.position.z = clumpPositionX;
-                    p.physicsBody = new PhysicsBody(p, PhysicsMotionType.STATIC, true, this._scene);
-                    p.physicsBody.shape = new PhysicsShapeMesh(p, this._scene);
-                    this.directLightShadowGen.addShadowCaster(p);
-                });
-                /*mj
-                this._treeMeshList.forEach((m, index) => {
-                    //let instance = m.createInstance("palmTree_" + index)
-                    instance.position.x = clumpPositionX;
-                    instance.position.y = 0.08;
-                    instance.position.z = clumpPositionZ;
-                    instance.rotation.y = Math.random() * (2*Math.PI);
-                    instance.physicsBody = new PhysicsBody(instance, PhysicsMotionType.STATIC, true, this._scene);
-                    instance.physicsBody.shape = new PhysicsShapeMesh(m as Mesh, this._scene);
-                    instance.freezeWorldMatrix();
-                    //instance.ignoreNonUniformScaling = true;
-                    //instance.alwaysSelectAsActiveMesh = true;
-                    this.directLightShadowGen.addShadowCaster(instance);
-                    
-                })  
-                  */  
-            }
-            for (var j = 0; j < instanceNum; j++) {
-                offsetX = 1.1 - (Math.random() * 2.1); 
-                offsetZ = 1.1 - (Math.random() * 2.1);
-                let instance = this._grass.createInstance("Grass_" + i);
-                instance.scaling = (new Vector3(0.1, 0.1, 0.04));
-                instance.position.x = clumpPositionX + offsetX; 
-                instance.position.y = targetMesh.position.y+0.08;
-                instance.position.z = clumpPositionZ + offsetZ;
-                //instance.ignoreNonUniformScaling = true;
-                //instance.alwaysSelectAsActiveMesh = true;
-                instance.checkCollisions = false;
-                instance.freezeWorldMatrix();
-                //scene.getLightByName("spotLight").getShadowGenerator().addShadowCaster(scene.getMeshByName("Grass_Blade_"+ i));
-            }
-        }
-        clumpArr.forEach((clump, index) => {
-            instanceNum = 3;
-            for (var i = 0; i < instanceNum; i++) {
-                //let targetMesh = scene.getMeshByName("Grass");
-                offsetX = 1.1 - (Math.random() * 2.2); 
-                offsetZ = 1.1 - (Math.random() * 2.2);
-                // checkRay(0,-1,0,"ground",new Vector3(offsetX, 2.5, offsetZ));
-                // while(offsetX < 0 && offsetX > -3) {
-                //     offsetX = 6 - Math.random()*12;
-                // }
-                // while(offsetZ > 1 && offsetZ < 3) {
-                //     offsetZ = 6 - Math.random()*12;
-                // }
-                let flowerIndex = Math.floor(Math.random()*(this._flowerArr.length-0.1));
-                //console.log(flowerIndex);
-                let instance = this._flowerArr[flowerIndex].createInstance("Flower_" + i*index);
-                instance.scaling = (new Vector3(0.1, 0.1, 0.04));
-                instance.position.x = clump.x + offsetX;
-                instance.position.y = this._grassFloor.position.y+0.15;
-                instance.position.z = clump.z + offsetZ;
-                //instance.ignoreNonUniformScaling = true;
-                //instance.alwaysSelectAsActiveMesh = true;
-                instance.checkCollisions = false;
-                instance.freezeWorldMatrix();
-                //scene.getLightByName("spotLight").getShadowGenerator().addShadowCaster(scene.getMeshByName("Grass_Blade_"+ i));
-                //instance.physicsImpostor = new PhysicsImpostor(instance, PhysicsImpostor.MeshImpostor,{mass:0, friction:1, restitution: 0},scene);
-            }
-        });
-
-        instanceNum = 7;
-        let offsetY = 0;
-        for (var i = 2; i<5; i++) {
-            // if (i<2) {
-            //     offsetX = targetMesh.position.x+6.5 - Math.random()*13;
-            //     offsetZ = targetMesh.position.z-8.5 + Math.random()*8.8;
-            //     while(offsetX < 0.2 && offsetX > -3.2) {
-            //         offsetX = targetMesh.position.x+6.5 - Math.random()*13; 
-            //     }
-            //     // while(offsetZ < 0.3) {
-            //     //     offsetZ = targetMesh.position.z-8.5 + Math.random()*8.8;
-            //     // }
-            //     offsetY = 0.08;
-            // }
-            // else 
-            if (i<3) {
-                offsetX = targetMesh.position.x-4 - (Math.random()*9);
-                offsetZ = targetMesh.position.z-18 + (Math.random()*23);
-                
-                while((offsetZ > -9 && offsetZ < 5) && (offsetX < 0 && offsetX > -7)) {
-                    offsetX = targetMesh.position.x-4 - (Math.random()*9);
-                    offsetZ = targetMesh.position.z-18 + (Math.random()*23);
-                }
-                // if (offsetZ<5) {
-                //     while((offsetX > -7 && offsetX < 7) ) {
-                //         offsetX = targetMesh.position.x - (Math.random()*13);
-                //     }
-                // }
-                // else {
-                //     offsetX = targetMesh.position.x - (Math.random()*13);
-                // }
-                offsetY = 0;
-            }
-            else {
-                offsetX = targetMesh.position.x+13 - (Math.random()*9);
-                offsetZ = targetMesh.position.z-18 + (Math.random()*23);
-                
-                while((offsetZ > -9 && offsetZ < 5) && (offsetX > 0 && offsetX < 7)) {
-                    offsetZ = targetMesh.position.z-18 + (Math.random()*23);
-                    offsetX = targetMesh.position.x+13 - (Math.random()*9);
-                }
-                // if (offsetZ<5) {
-                //     while((offsetX > 0 && offsetX < 7) ) {
-                //         offsetX = targetMesh.position.x + 12 - (Math.random()*5);
-                //     }
-                // }
-                // else {
-                //     offsetX = targetMesh.position.x + 12 - (Math.random()*12);
-                // }
-                offsetY = 0;
-            }
-
-            this
-            /*
-            this._treeMeshList.forEach(m => {
-                let instance = m.createInstance("palmTree_" + i);
-                instance.position.x = offsetX;
-                instance.position.y = offsetY;
-                instance.position.z = offsetZ;
-                instance.rotation.y = Math.random() * (2*Math.PI);
-                //instance.ignoreNonUniformScaling = true;
-                //instance.alwaysSelectAsActiveMesh = true;
-                instance.physicsBody = new PhysicsBody(instance, PhysicsMotionType.STATIC, true, this._scene);
-                instance.physicsBody.shape = new PhysicsShapeMesh(m as Mesh, this._scene); 
-                instance.checkCollisions = false;
-                instance.freezeWorldMatrix();
-                this.directLightShadowGen.addShadowCaster(instance);
-            });
+                If another point were 2 cells away in x or y, then the minimum distance between the centers would be ≥ 2 * (r/√2) = √2 r > r.
+                With point extents inside cells, the actual minimum remains ≥ r. Hence no need to look beyond the immediate neighbors.
             */
+            // Only check th square grid around current tile
+            for (let di=-1; di<=1; di++) {
+                for (let dj=-1; dj<=1; dj++) {
+                    const idx = grid.get(key(i+di, j+dj));
+                    // If the point does exist, check if the distance is greater than the radius and return false if not
+                    if (idx != null) {
+                        const q = points[idx];
+                        const dx = p.x - q.x, dz = p.y - q.y;
+                        if (dx*dx + dz*dz < r*r) return false;
+                    }
+                }
+            }     
+            return true;
+        };
+
+        const randomInBounds = () =>
+            new Vector2(
+                bounds.min.x + (bounds.max.x - bounds.min.x) * rand(),
+                bounds.min.y + (bounds.max.y - bounds.min.y) * rand()
+            );
+    
+        // Seed: try to place N initial active points (helps with disconnected or very concave shapes)
+        const trySeed = () => {
+            let tries = 5000;
+            while (tries-- > 0) {
+                const p = randomInBounds();
+                if (isAllowed(p) && farFromNeighbors(p)) {
+                    const gi = gridIndex(p);
+                    grid.set(key(gi.i, gi.j), points.length);
+                    points.push(p);
+                    active.push(points.length - 1);
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        for (let s = 0; s < initialSeeds && points.length < maxPoints; s++) {
+            if (!trySeed()) break;
         }
-        
+
+        if (points.length === 0) return [];
+
+        // Main Bridson loop
+        // Continue while we still have a frontier and we haven’t hit our target count.
+        while (active.length && points.length < maxPoints) {
+            // Pick a random active point (uniform among active). The bitwise | 0 floors.
+            // pa is the actual Vector2 for that active index. Random spreads growth evenly, avoiding streaks/ordering bias.
+            const aIdx = (rand() * active.length) | 0;
+            const pa = points[active[aIdx]];
+            let spawned = false;
+            // Give this active point up to k chances to spawn a valid neighbor before we retire it.
+            for (let t = 0; t < k; t++) {
+                const radius = r * (1 + rand());          // uniform in [r, 2r]
+                const angle = Scalar.TwoPi * rand();
+                // Generate a candidate around pa in the annulus [r, 2r].
+                // For area-uniform annulus sampling, use
+                // const u = rand(); const radius = Math.sqrt(r*r + u*((2*r)*(2*r)-r*r));
+                const q = new Vector2(pa.x + radius * Math.cos(angle), pa.y + radius * Math.sin(angle));
+                // If not within custom shape rules, and farther than r from all existing points, skip to next attempt
+                if (!isAllowed(q) || !farFromNeighbors(q)) continue;
+                // Find the position on the grid and store it in the grid
+                // Note: Order is important. 
+                // Before the push, points.length is n. The new point will live at index n.
+                const gi = gridIndex(q);
+                // Set the grid value to n before pushing.
+                grid.set(key(gi.i, gi.j), points.length);
+                // Then push(q) (now points.length is n+1), and active.push(points.length - 1) also pushes n.
+                // Grid and active both reference the same new index. No off-by-one.
+                points.push(q);
+                active.push(points.length - 1);
+                spawned = true;
+                // Stop early if we reached the target count.
+                if (points.length >= maxPoints) break;
+            }
+
+            // If the active point couldn’t spawn anything in k tries, remove it from the frontier with a swap-pop
+            if (!spawned) {
+                // Replace active[aIdx] by the last element
+                active[aIdx] = active[active.length - 1];
+                // Then pop() the last element
+                active.pop();
+            }
+        }
+
+        return points;
     }
 
+    // #region Poisson-Disc Helpers
+
+    //MARK: SemiCircle Predicate    
+    /** Keep points that are inside the disk and on the "keep" side of the diameter line. */
+    private _makeSemicirclePredicate(C: Vector2, R: number, N: Vector2) {
+        const R2 = R * R; const n = N.normalize();
+        return (p: Vector2) => {
+            const dx = p.x - C.x, dz = p.y - C.y;
+            const insideCircle = dx*dx + dz*dz <= R2;
+            const keepSide = (dx * n.x + dz * n.y) >= 0;   // dot((p-C), N) >= 0
+            return insideCircle && keepSide;
+        };
+    }   
+
+    //MARK: Crescent Predicate   
+    private _makeCrescentPredicate(C1: Vector2, R1: number, C2: Vector2, R2: number) {
+        const R1_2 = R1*R1, R2_2 = R2*R2;
+        return (p: Vector2) => {
+            const d1x = p.x - C1.x, d1z = p.y - C1.y;
+            const d2x = p.x - C2.x, d2z = p.y - C2.y;
+            const inOuter = d1x*d1x + d1z*d1z <= R1_2;
+            const outInner = d2x*d2x + d2z*d2z >= R2_2;
+            return inOuter && outInner;
+        };
+    }  
+
+    //MARK: pointInPolyGonXZ   
+    /** Uses the even-odd rule to determine if a point is inside a polygon by counting how many times a horizontal ray from point p to +X crosses polygon edges. Each crossing toggles inside. 
+     * Inside a rectangle: the ray crosses exactly one vertical edge (the one to the right of the point). So you toggle once - inside = true.
+     * Left of the rectangle: the ray crosses both vertical edges (both are to the right of the point), so you toggle twice - inside = false.
+     * Right of the rectangle: crosses none - inside = false.
+     * Exactly between two disjoint shapes: you might cross 0, 2, 4… edges - always outside.   
+     * Inside between with disjointed shapes to the right: your cross the first edge, then 0, 2, 4… edges - always inside.
+    */   
+    private _pointInPolygonXZ(p: Vector2, poly: Vector2[]): boolean {
+        let inside = false;
+        for (let i=0, j=poly.length-1; i<poly.length; j=i++) {
+            const xi = poly[i].x, zi = poly[i].y, xj = poly[j].x, zj = poly[j].y;
+            const hit = ((zi > p.y) !== (zj > p.y)) && (p.x < (xj - xi) * (p.y - zi) / ((zj - zi) || 1e-12) + xi);
+            if (hit) inside = !inside;
+        }
+        return inside;
+    }
+        
+    //MARK: Helpers to determine boundary
+    /** AABB(bounds) of a single polygon on XZ (Vector2.x = X, Vector2.y = Z). */
+    private _aabbOfPoly(poly: Vector2[]): { min: Vector2; max: Vector2 } {
+        if (!poly.length) throw new Error("aabbOfPoly: empty polygon");
+        let minX = poly[0].x, maxX = poly[0].x;
+        let minZ = poly[0].y, maxZ = poly[0].y;
+
+        for (let i = 1; i < poly.length; i++) {
+            const v = poly[i];
+            if (v.x < minX) minX = v.x;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y < minZ) minZ = v.y;
+            if (v.y > maxZ) maxZ = v.y;
+        }
+        return { min: new Vector2(minX, minZ), max: new Vector2(maxX, maxZ) };
+    }
+
+    /** AABB(bounds) of multiple polygons (union). Handy when you have several areas to plot. */
+    private _aabbOfPolys(polys: Vector2[][]): { min: Vector2; max: Vector2 } {
+        if (!polys.length) throw new Error("aabbOfPolys: no polygons");
+        let first = true;
+        let minX = 0, maxX = 0, minZ = 0, maxZ = 0;
+
+        for (const poly of polys) {
+            if (!poly.length) continue;
+            const { min, max } = this._aabbOfPoly(poly);
+            if (first) {
+                minX = min.x; maxX = max.x; minZ = min.y; maxZ = max.y; first = false;
+            } else {
+                if (min.x < minX) minX = min.x;
+                if (max.x > maxX) maxX = max.x;
+                if (min.y < minZ) minZ = min.y;
+                if (max.y > maxZ) maxZ = max.y;
+            }
+        }
+        if (first) throw new Error("aabbOfPolys: all polygons were empty");
+        return { min: new Vector2(minX, minZ), max: new Vector2(maxX, maxZ) };
+    }
+
+    //MARK: _expandAABB  
+    /** Expand/shrink an AABB by padding (use negative pad to shrink). */
+    private _expandAabbXZ(aabb: {min: Vector2; max: Vector2}, pad: number) {
+        return {
+            min: new Vector2(aabb.min.x - pad, aabb.min.y - pad),
+            max: new Vector2(aabb.max.x + pad, aabb.max.y + pad),
+        };
+    }   
+        
+    //MARK: _makeRNG 
+    private _makeRng(seed?: number): () => number {
+        if (seed == null) return Math.random;
+        let s = (seed >>> 0) || 1;
+        return () => ((s = (1664525 * s + 1013904223) >>> 0), (s & 0xfffffff) / 0x10000000);
+    }
+    // #endregion
+    
+    //#endregion Palm Tree
+
+//#endregion Imported Assets
+ 
 }
 

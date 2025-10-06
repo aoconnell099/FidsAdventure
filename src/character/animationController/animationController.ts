@@ -423,8 +423,7 @@ export class AnimationController {
   private stopGroundLoopers() {
     try { this.animations.locomotion.run?.stop(); } catch {}
     try { this.animations.locomotion.sprint?.stop(); } catch {}
-  }
-  
+  }  
 
   // ===== hygiene / utils =====================================================
 

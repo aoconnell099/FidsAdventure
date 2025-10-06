@@ -46,18 +46,7 @@ export const ANIM_CONFIG = {
     run:    [11/24, 30/24], // [0.459, 1.25]     
     sprint: [ 7/24, 19/24], // [0.292, 0.792]  
   },
-//   airFrames: {
-//     jump: [1, 11], 
-//     fall: [11, 22], 
-//     land: [22, 30] 
-//   },
-//   // Convert frames to seconds to handle fps conversion between blender and babylon
-//   // Allows handling of any frame rate to swtch between phases of the jump 
-//   airSecs: { 
-//     jump: [0/24, 11/24], // [2/24, 10/24],
-//     fall: [11/24, 22/24], // [11/24, 22/24],
-//     land: [22/24, 30/24]  
-// },
+
   airSpeeds: {
     jumpUp: 1.5, // default 2.2
     fall: 1.5, // default 1.5
